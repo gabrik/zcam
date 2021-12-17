@@ -11,35 +11,29 @@
 // Contributors:
 //   ADLINK zenoh team, <zenoh@adlink-labs.tech>
 //
-use clap::{App, Arg, Values};
-use zenoh::net::*;
-use opencv::{
-    highgui,
-    prelude::*,
-};
+use clap::{App, Arg};
+use opencv::{highgui, prelude::*};
+use zenoh::prelude::*;
 
 fn main() {
     // initiate logging
     env_logger::init();
-    let (config, path) = parse_args();
+    let (config, key_expr) = parse_args();
 
     println!("Openning session...");
-    let session = open(config).wait().unwrap();
-    let sub_info = SubInfo {
-        reliability: Reliability::Reliable,
-        mode: SubMode::Push,
-        period: None
-    };
-    let sub_key = path.clone();
-    let mut sub = session.declare_subscriber(&sub_key.into(), &sub_info).wait().unwrap();
+    let session = zenoh::open(config).wait().unwrap();
 
-    let window = &format!("[{}] Press 'q' to quit.", &path);
+    let mut subscriber = session.subscribe(&key_expr).wait().unwrap();
+
+    let window = &format!("[{}] Press 'q' to quit.", &key_expr);
     highgui::named_window(window, 1).unwrap();
 
-    while let Ok(sample) = sub.receiver().recv() {
+    while let Ok(sample) = subscriber.receiver().recv() {
         let decoded = opencv::imgcodecs::imdecode(
-            &opencv::types::VectorOfu8::from_iter(sample.payload.to_vec()),
-            opencv::imgcodecs::IMREAD_COLOR).unwrap();
+            &opencv::types::VectorOfu8::from_iter(sample.value.payload.to_vec()),
+            opencv::imgcodecs::IMREAD_COLOR,
+        )
+        .unwrap();
 
         if decoded.size().unwrap().width > 0 {
             // let mut enlarged = Mat::default().unwrap();
@@ -47,36 +41,50 @@ fn main() {
             highgui::imshow(window, &decoded).unwrap();
         }
 
-        if highgui::wait_key(10).unwrap() == 113 { // 'q'
+        if highgui::wait_key(10).unwrap() == 113 {
+            // 'q'
             break;
         }
     }
-    sub.undeclare().wait().unwrap();
+    subscriber.close().wait().unwrap();
     session.close().wait().unwrap();
 }
 
-fn parse_args() -> (ConfigProperties, String) {
+fn parse_args() -> (zenoh::config::Config, String) {
     let args = App::new("zenoh-net video display example")
-        .arg(Arg::from_usage("-m, --mode=[MODE] 'The zenoh session mode.")
-            .possible_values(&["peer", "client"]).default_value("peer"))
-        .arg(Arg::from_usage("-p, --path=[path] 'The zenoh path on which the video will be published.")
-            .default_value("/demo/zcam"))
-        .arg(Arg::from_usage("-e, --peer=[LOCATOR]...  'Peer locators used to initiate the zenoh session.'"))
+        .arg(
+            Arg::from_usage("-m, --mode=[MODE] 'The zenoh session mode (peer by default).")
+                .possible_values(&["peer", "client"]),
+        )
+        .arg(Arg::from_usage(
+            "-e, --peer=[LOCATOR]...  'Peer locators used to initiate the zenoh session.'",
+        ))
+        .arg(
+            Arg::from_usage("-k, --key=[KEYEXPR]        'The key expression to publish onto.'")
+                .default_value("/demo/example/zenoh-rs-pub"),
+        )
+        .arg(Arg::from_usage(
+            "-e, --peer=[LOCATOR]...  'Peer locators used to initiate the zenoh session.'",
+        ))
         .get_matches();
 
-    let path = args.value_of("path").unwrap();
+    let mut config = zenoh::config::Config::default();
 
-    let mut config = config::empty();
-    config.insert(
-        config::ZN_MODE_KEY,
-        String::from(args.value_of("mode").unwrap()),
-    );
-    for peer in args
-        .values_of("peer")
-        .or_else(|| Some(Values::default()))
-        .unwrap()
-    {
-        config.insert(config::ZN_PEER_KEY, String::from(peer));
+    if let Some(Ok(mode)) = args.value_of("mode").map(|mode| mode.parse()) {
+        config.set_mode(Some(mode)).unwrap();
     }
-    (config, path.to_string())
+    match args.value_of("mode").map(|m| m.parse()) {
+        Some(Ok(mode)) => {
+            config.set_mode(Some(mode)).unwrap();
+        }
+        Some(Err(())) => panic!("Invalid mode"),
+        None => {}
+    };
+    if let Some(values) = args.values_of("peer") {
+        config.peers.extend(values.map(|v| v.parse().unwrap()))
+    }
+
+    let key_expr = args.value_of("key").unwrap().to_string();
+
+    (config, key_expr)
 }
