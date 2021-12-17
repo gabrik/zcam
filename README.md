@@ -10,7 +10,7 @@ In order to build and run ZCam you need to have [Rust](rust-lang.org) and [OpenC
 To get and build ZCam do the following:
 
 ```
-$ git clone git@github.com:kydos/zcam.git
+$ git clone https://github.com/gabrik/zcam
 $ cd zcam
 $ cargo build --release
 ```
